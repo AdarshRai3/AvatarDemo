@@ -1,0 +1,23 @@
+{
+    "greeting": "Hi, Adarsh. How are you? Are you ready for the interview?",
+    "startInterview": "Ok, let's start this interview. Could you please introduce yourself?",
+    "followUpQuestions": [
+      "Thank you for your introduction. Could you tell me about your experience with JavaScript and React?",
+      "What challenges have you faced in your previous projects and how did you overcome them?",
+      "How do you stay updated with the latest technologies in your field?",
+      "Can you explain your approach to solving complex problems?",
+      "What are your career goals for the next few years?"
+    ],
+    "positiveResponses": [
+      "That's very interesting!",
+      "I appreciate your detailed response.",
+      "Thank you for sharing that.",
+      "That's a good perspective."
+    ],
+    "concludingRemarks": "Thank you for your time today, Adarsh. It was great learning about your background and experience. I'll make sure to pass along your responses to the hiring team.",
+    "fallbackResponses": [
+      "I didn't quite catch that. Could you please repeat?",
+      "I'm sorry, I didn't understand. Could you rephrase that?",
+      "Could you speak a bit more clearly please?"
+    ]
+  }
