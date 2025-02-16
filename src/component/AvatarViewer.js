@@ -8,7 +8,10 @@ const AvatarModel = ({ glbUrl, isBlinking, isNodding, mouthOpenValue }) => {
   const { scene } = useGLTF(glbUrl);
   const headRef = useRef();
   const initialHeadRotation = useRef(null);
+  const nodAnimationRef = useRef(null);
+  const blinkAnimationRef = useRef(null);
 
+  // Initial setup for head reference
   useEffect(() => {
     if (scene) {
       const head = scene.getObjectByName("Head");
@@ -19,86 +22,182 @@ const AvatarModel = ({ glbUrl, isBlinking, isNodding, mouthOpenValue }) => {
     }
   }, [scene]);
 
-  // Handle blinking
+  // Handle blinking with smooth animation
   useEffect(() => {
     if (scene) {
-      // Find the morph target index for blinking
       const head = scene.getObjectByName("Head");
       if (head && head.morphTargetDictionary && head.morphTargetInfluences) {
         const blinkIndex = head.morphTargetDictionary["eyesClosed"];
-        if (blinkIndex !== undefined) {
-          head.morphTargetInfluences[blinkIndex] = isBlinking ? 1 : 0;
+        
+        if (isBlinking && blinkIndex !== undefined && !blinkAnimationRef.current) {
+          const startTime = Date.now();
+          const blinkDuration = 200; // Faster, more natural blink duration
+          
+          blinkAnimationRef.current = setInterval(() => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / blinkDuration, 1);
+            
+            // Smooth easing function for natural blink
+            const blinkValue = progress <= 0.5 
+              ? progress * 2  // Close eyes
+              : 2 * (1 - progress); // Open eyes
+            
+            head.morphTargetInfluences[blinkIndex] = blinkValue;
+            
+            if (progress >= 1) {
+              clearInterval(blinkAnimationRef.current);
+              blinkAnimationRef.current = null;
+              head.morphTargetInfluences[blinkIndex] = 0;
+            }
+          }, 16);
         }
       }
     }
+    
+    return () => {
+      if (blinkAnimationRef.current) {
+        clearInterval(blinkAnimationRef.current);
+        blinkAnimationRef.current = null;
+      }
+    };
   }, [isBlinking, scene]);
 
-  // Handle nodding
+  // Handle nodding with subtle, single nod
   useEffect(() => {
     if (headRef.current && initialHeadRotation.current !== null) {
-      if (isNodding) {
-        const nodInterval = setInterval(() => {
-          headRef.current.rotation.x = initialHeadRotation.current + (Math.sin(Date.now() * 0.01) * 0.1);
-        }, 16);
+      if (isNodding && !nodAnimationRef.current) {
+        let startTime = Date.now();
+        const duration = 800; // Duration for a single, subtle nod
         
-        return () => clearInterval(nodInterval);
-      } else {
-        headRef.current.rotation.x = initialHeadRotation.current;
+        nodAnimationRef.current = setInterval(() => {
+          const elapsed = Date.now() - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          
+          // Single subtle nod using sine wave
+          const nodAngle = Math.sin(progress * Math.PI) * 0.1; // Reduced amplitude for subtlety
+          headRef.current.rotation.x = initialHeadRotation.current + nodAngle;
+          
+          if (progress >= 1) {
+            clearInterval(nodAnimationRef.current);
+            headRef.current.rotation.x = initialHeadRotation.current;
+            nodAnimationRef.current = null;
+          }
+        }, 16);
       }
     }
+    
+    return () => {
+      if (nodAnimationRef.current) {
+        clearInterval(nodAnimationRef.current);
+        if (headRef.current) {
+          headRef.current.rotation.x = initialHeadRotation.current;
+        }
+        nodAnimationRef.current = null;
+      }
+    };
   }, [isNodding]);
+
 
   // Handle mouth movement for lip sync
   useEffect(() => {
     if (scene) {
-      const head = scene.getObjectByName("Head");
-      if (head && head.morphTargetDictionary && head.morphTargetInfluences) {
-        const mouthOpenIndex = head.morphTargetDictionary["mouthOpen"];
-        if (mouthOpenIndex !== undefined) {
-          head.morphTargetInfluences[mouthOpenIndex] = mouthOpenValue;
+      scene.traverse((object) => {
+        if (object.isMesh && object.morphTargetDictionary && object.morphTargetInfluences) {
+          const mouthOpenIndex = object.morphTargetDictionary["mouthOpen"];
+          if (mouthOpenIndex !== undefined) {
+            object.morphTargetInfluences[mouthOpenIndex] = mouthOpenValue;
+          }
         }
-      }
+      });
     }
   }, [mouthOpenValue, scene]);
 
   return <primitive object={scene} position={[0, -1.2, 0]} scale={1.6} />;
 };
 
+// Preload the model
 useGLTF.preload("https://models.readyplayer.me/67af11145cbda0313498bf57.glb");
 
 const AvatarViewer = ({ glbUrl }) => {
   const [isBlinking, setIsBlinking] = useState(false);
   const [isNodding, setIsNodding] = useState(false);
   const [mouthOpenValue, setMouthOpenValue] = useState(0);
-  const [responseText, setResponseText] = useState("Click the mic and speak");
-  const { transcript, listening, resetTranscript } = useSpeechRecognition();
+  const [responseText, setResponseText] = useState("Click the mic to start a conversation");
+  const [conversationActive, setConversationActive] = useState(false);
+  const { transcript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition();
   const isSpeakingRef = useRef(false);
+  const utteranceRef = useRef(null);
+  const lastTranscriptRef = useRef("");
+  const userInterruptedRef = useRef(false);
+  const selfSpeechTimeoutRef = useRef(null);
+  const lastProcessedTranscriptRef = useRef("");
+  const processingTimeoutRef = useRef(null);
 
-  // Set up automatic blinking
   useEffect(() => {
     const blinkInterval = setInterval(() => {
       setIsBlinking(true);
       setTimeout(() => setIsBlinking(false), 200);
-    }, 4000 + Math.random() * 2000); // Random blink every 4-6 seconds
+    }, 3000); // Blink every 3 seconds
     
     return () => clearInterval(blinkInterval);
   }, []);
-
-  // Handle speech recognition
+  
+  // Replace the existing nodding setup with this:
   useEffect(() => {
-    if (!listening && transcript) {
-      setIsNodding(false);
-      setTimeout(() => {
-        sendToGemini(transcript);
-      }, 500);
-    } else if (listening) {
+    if (listening) {
       setIsNodding(true);
+      // Reset nodding after the animation duration
+      setTimeout(() => setIsNodding(false), 800);
     }
-  }, [listening, transcript]);
+  }, [listening]);
 
-  // Send user input to Gemini API
+  // Handle speech recognition with keyword detection
+  useEffect(() => {
+    const interruptionKeywords = ['stop', 'listen', 'wait', 'pause', 'hold on'];
+    
+    const handleUserSpeech = () => {
+      if (transcript && transcript !== lastTranscriptRef.current) {
+        const lowercaseTranscript = transcript.toLowerCase();
+        const hasInterruptionKeyword = interruptionKeywords.some(keyword => 
+          lowercaseTranscript.includes(keyword)
+        );
+        
+        // Only handle interruption if AI is speaking and user uses an interruption keyword
+        if (isSpeakingRef.current && hasInterruptionKeyword) {
+          userInterruptedRef.current = true;
+          window.speechSynthesis.cancel();
+          setResponseText("Yes, I'm listening. What would you like to say?");
+          speak("Yes, I'm listening. What would you like to say?", true);
+        } else if (!isSpeakingRef.current && transcript.trim().length > 0) {
+          // Normal flow - user is speaking when AI is not
+          setIsNodding(true);
+          setTimeout(() => setIsNodding(false), 100);
+          
+          // Process after a brief delay to ensure complete sentence
+          setTimeout(() => {
+            const currentTranscript = transcript;
+            lastTranscriptRef.current = currentTranscript;
+            resetTranscript();
+            sendToGemini(currentTranscript);
+          }, 1500);
+        }
+      }
+    };
+    
+    if (conversationActive) {
+      handleUserSpeech();
+    }
+  }, [transcript, conversationActive, resetTranscript]);
+  // Handle the Gemini API call
   const sendToGemini = async (text) => {
     try {
+      // Stop any ongoing speech
+      if (utteranceRef.current) {
+        window.speechSynthesis.cancel();
+      }
+      
+      setResponseText(`Processing: "${text}"`);
+      
       const response = await axios.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyBeP3MxXlDGJFlYxQnfRiGkjXbJCVE7ZxI",
         {
@@ -116,37 +215,95 @@ const AvatarViewer = ({ glbUrl }) => {
       setResponseText("Sorry, I couldn't get a response from the AI at this time.");
       speak("Sorry, I couldn't get a response from the AI at this time.");
     }
-    
-    resetTranscript();
   };
 
-  // Text-to-speech with lip sync
-  const speak = (text) => {
+  // Text-to-speech with lip sync and interruption handling
+  const speak = (text, isInterruptionResponse = false) => {
     if (window.speechSynthesis) {
-      const utterance = new SpeechSynthesisUtterance(text);
+      window.speechSynthesis.cancel();
       
-      // Set up lip sync
+      const utterance = new SpeechSynthesisUtterance(text);
+      utteranceRef.current = utterance;
+      
+      // Disable speech recognition temporarily
       isSpeakingRef.current = true;
+      SpeechRecognition.stopListening();
+      
+      let lipSyncInterval;
       
       utterance.onstart = () => {
-        const lipSyncInterval = setInterval(() => {
-          if (isSpeakingRef.current) {
-            setMouthOpenValue(Math.random() * 0.8); // Random mouth movement
-          } else {
-            clearInterval(lipSyncInterval);
-            setMouthOpenValue(0);
-          }
+        // Clear any existing timeouts
+        if (selfSpeechTimeoutRef.current) {
+          clearTimeout(selfSpeechTimeoutRef.current);
+        }
+        
+        lipSyncInterval = setInterval(() => {
+          setMouthOpenValue(Math.random() * 0.5 + 0.1);
         }, 100);
       };
       
       utterance.onend = () => {
-        isSpeakingRef.current = false;
+        clearInterval(lipSyncInterval);
         setMouthOpenValue(0);
+        
+        // Add a small delay before re-enabling speech recognition
+        selfSpeechTimeoutRef.current = setTimeout(() => {
+          isSpeakingRef.current = false;
+          if (conversationActive) {
+            SpeechRecognition.startListening({ continuous: true });
+          }
+          
+          if (isInterruptionResponse) {
+            userInterruptedRef.current = false;
+            resetTranscript();
+            lastProcessedTranscriptRef.current = "";
+          }
+        }, 500); // 500ms delay to avoid self-feedback
+        
+        utteranceRef.current = null;
+      };
+      
+      utterance.onerror = () => {
+        clearInterval(lipSyncInterval);
+        setMouthOpenValue(0);
+        isSpeakingRef.current = false;
+        utteranceRef.current = null;
+        
+        if (conversationActive) {
+          SpeechRecognition.startListening({ continuous: true });
+        }
       };
       
       window.speechSynthesis.speak(utterance);
     }
   };
+
+
+  // Toggle conversation state
+  const toggleConversation = () => {
+    if (conversationActive) {
+      // Stop conversation
+      setConversationActive(false);
+      if (utteranceRef.current) {
+        window.speechSynthesis.cancel();
+      }
+      SpeechRecognition.stopListening();
+      setResponseText("Click the mic to start a conversation");
+      lastTranscriptRef.current = "";
+      userInterruptedRef.current = false;
+    } else {
+      // Start conversation
+      setConversationActive(true);
+      setResponseText("I'm listening... say something!");
+      lastTranscriptRef.current = "";
+      userInterruptedRef.current = false;
+      SpeechRecognition.startListening({ continuous: true });
+    }
+  };
+
+  if (!browserSupportsSpeechRecognition) {
+    return <div>Your browser doesn't support speech recognition. Please try a different browser.</div>;
+  }
 
   return (
     <div style={{ textAlign: "center" }}>
@@ -178,23 +335,19 @@ const AvatarViewer = ({ glbUrl }) => {
         </Canvas>
       </div>
       <button
-        onClick={() => {
-          if (!isSpeakingRef.current) {
-            SpeechRecognition.startListening({ continuous: false })
-          }
-        }}
+        onClick={toggleConversation}
         style={{ 
           marginTop: "20px", 
-          padding: "10px", 
+          padding: "10px 20px", 
           fontSize: "16px",
-          backgroundColor: listening ? "#ff6b6b" : "#4caf50",
+          backgroundColor: conversationActive ? "#ff6b6b" : "#4caf50",
           color: "white",
           border: "none",
           borderRadius: "5px",
           cursor: "pointer"
         }}
       >
-        {listening ? "🎤 Listening..." : "🎤 Speak"}
+        {conversationActive ? "🛑 End Conversation" : "🎤 Start Conversation"}
       </button>
       <div style={{ 
         marginTop: "20px", 
@@ -203,10 +356,16 @@ const AvatarViewer = ({ glbUrl }) => {
         borderRadius: "5px",
         maxWidth: "500px",
         margin: "20px auto",
-        textAlign: "left"
+        textAlign: "left",
+        minHeight: "100px"
       }}>
-        <p><strong>Response:</strong> {responseText}</p>
-        {transcript && <p><strong>You said:</strong> {transcript}</p>}
+        <p><strong>{isSpeakingRef.current ? "AI is speaking:" : "AI response:"}</strong> {responseText}</p>
+        {transcript && conversationActive && <p><strong>You are saying:</strong> {transcript}</p>}
+        {conversationActive && <p className="text-sm text-gray-500" style={{ fontSize: "0.875rem", color: "#6b7280" }}>
+          {isSpeakingRef.current ? 
+            "Please wait while I'm speaking... (but I'm still listening if you need to interrupt)" : 
+            "I'm listening... speak clearly!"}
+        </p>}
       </div>
     </div>
   );
